@@ -1,0 +1,289 @@
+---
+title: "Tour"
+author: "Marc Schwering"
+date: "`r Sys.Date()`"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Tour}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+# Contents
+1. [Quick Tour](#quicky)  
+1.1 [Data](#qdata)  
+1.2 [Modelling](#qmodel)  
+1.3 [Prediction](#qpred)  
+1.4 [Evalutation](#qeval)
+  
+2. [Extension](#ext)  
+2.1 [Objects](#xobj)  
+2.2 [Prediction](#xpred)  
+2.3 [Visualization](#xviz)
+  
+<br/><br/>
+
+```{r setup, echo=FALSE, results="hide"}
+knitr::opts_chunk$set(echo = TRUE, fig.width = 7, fig.height = 7)
+```
+
+<br/><br/>
+
+# Quick Tour <a name="quicky"></a>
+
+## Data <a name="qdata"></a>
+
+Imagine you have a set of proteins for which it is known whether they are RNA-binding (RBP) or not (NoRBP).
+The amino acid sequences of these proteins must be known and stored in an array. 
+Here, we artificially create a random array of 500 protein sequences of varying lengths.
+
+```{r}
+# biological relevant amino acids
+l <- c("A", "E", "K", "S", "R", "Q", "L", "T", "N", "G", "M", "W", "D", "H", "F", "Y", "C", "I", "P", "V") 
+
+# create array
+set.seed(42)
+sequences <- sapply(sample(10:100, 500, replace = TRUE), function(x) paste(sample(l, x, replace = TRUE), collapse = ""))
+head(sequences)
+```
+
+The labels of these proteins -- whether they are RBP or NoRBP -- are stored a second array consisting of 0's and 1's.
+A 0 denotes NoRBP, 1 denotes RBP.
+Here, we just label the first 200 proteins as RBP and the remaining 300 as NoRBP.
+
+```{r}
+labels <- c(rep(1, 200), rep(0, 300))
+```
+
+For the first 200 proteins -- our RBPs - we introduce some kind of pattern that our model should find later on.
+I will introduce some amino acid combinations with S and R.
+
+```{r}
+# combinations of R and S in length 1 to 4
+pattern <- 1:4
+pattern <- lapply(pattern, function(x) c("S", "R", ""))
+pattern <- expand.grid(pattern, stringsAsFactors = FALSE)
+pattern <- sort(apply(pattern, 1, function(x) paste(x, collapse = "")))
+
+# randomly introduce pattern in first 200 sequences
+sequences[1:200] <- sapply(sequences[1:200], function(x) {
+  pat <- sort(sample.int(nchar(x), sample.int(nchar(x) - 1, 1) + 1))
+  paste0(substring(x, pat[-length(pat)], pat[-1] - 1), sample(pattern, length(pat) - 1, replace = TRUE), collapse = "")
+})
+```
+
+## Modelling <a name="qmodel"></a>
+
+These two arrays can now be used to train a model to distinguish RBPs and NoRBPs. 
+This package uses a shrinkage discriminant analysis (sda) for this.
+As features for the model occurences of peptide combinations in each protein are used.
+Here, tri-peptide combinations (the default) are computed. 
+The function will first rank all features based on the data. 
+Featurres which contribute to the classification most will be kept.
+
+```{r, message=FALSE, results='hide', warning=FALSE}
+library(RBDpredict)
+model <- RBDfit(sequences, labels)
+```
+
+The resulting object contains information about the data you supplied to the `RBDfit` function and the actual model which was created.
+
+```{r}
+model
+```
+
+You would now want to use this model to predict RBPs from a new set of sequences.
+In order to do so, a classificator has to determine for each new sequence whether it is RBP or NoRBP.
+This could be done in different fashions.
+The label RBP could be handed out loosely or very stringently.
+The question is how many and what kind of errors you chose to accept in your classification.
+To get an idea how well a predictor performs we estimate need to estimate prediction errors.
+Here, a 5-fold Cross Validation is performed to estimate these errors.
+This error estimate is then added to our model.
+
+```{r, message=FALSE, results='hide', warning=FALSE}
+err <- cvRBDfit(model, sequences, labels, nfold = 5)
+model <- addErr(model, err)
+```
+
+Among other things, result of the cross validation contains a matrix `RBDerr` containing **TP** (True Positive), **FP** (False Positive), **TN** (True Negative), and **FN** (False Negative) classifications at different stringencies. 
+We could draw a ROC curve for this data.
+
+```{r}
+ROCplot(err)
+```
+
+As the curve is skewed to the left, it seems that the predictor has found the pattern in the data. However, the points of the ROC curve are not evenly distributed. A look at the posterior probabilities can clarify this.
+
+```{r, fig.height=4}
+plot(err)
+```
+
+Almost all posterior probabilities are either very close to 0 or very close to 1. This means the predictor is quite sure about how to classify each sequence. So, varying the stringenvy does not have such a huge effect on the classification outcome.
+
+Here, we want to predict RBPs with a FDR of 10\%. A look at the Precision Recall curve shows us whether this is actually possible.
+
+```{r}
+PRplot(err, FDR = 0.1)
+```
+
+Indeed, a FDR of 10\% can be reached with a sensitivity of around 80\%. Often very low FDR's cannot be reached.
+That's why it is good to check this first.
+
+## Prediction <a name="qpred"></a>
+
+Now we want to use this model to classify 1000 new sequences. Here, I create random sequences and add a pattern to the first 400 as I did above.
+
+```{r}
+newseq <- sapply(sample(10:100, 1000, replace = TRUE), function(x) paste(sample(l, x, replace = TRUE), collapse = ""))
+
+newseq[1:400] <- sapply(newseq[1:400], function(x) {
+  pat <- sort(sample.int(nchar(x), sample.int(nchar(x) - 1, 1) + 1))
+  paste0(substring(x, pat[-length(pat)], pat[-1] - 1), 
+       sample(pattern, length(pat) - 1, replace = TRUE), collapse = "")
+})
+```
+
+Now, the predictor hopefully finds these sequences. False discovery rate is set to 10\%, expected sensitivity is roughly 80\%.
+
+```{r, message=FALSE, warning=FALSE, results='hide'}
+pred <- predict(model, seq = newseq, FDR = 0.1)
+```
+
+## Evaluation <a name="qeval"></a>
+
+```{r}
+pred
+```
+
+We can already see by the number of predicted RBPs that there are some classification errors. 
+In a real situation we wouldn't know which are correct in which not.
+But here we can evaluate the classification.
+
+The first 400 sequences included the pattern, so they are our _condition positive_, the rest ist _negative_. The classification can be extracted from the resulting object.
+
+```{r}
+newlab <- pred$RBDclass
+
+TP <- sum(newlab[1:400])
+FP <- sum(newlab[401:1000])
+TN <- sum(newlab[1:400] == 0)
+FN <- sum(newlab[400:1000] == 0)
+```
+
+Now, we can see how well the estimated FDR and sensitivtiy was kept.
+
+```{r}
+(FDR <- FP / (FP + TP))
+(sens <- TP / (TP + FN))
+```
+
+We adjusted the classification to a FDR of 10\%. With around 13\% FDR the predictor roughly holds its promise.
+The Cross Validation estimated that with a FDR of 10\% we would still find around 80\% of all true RBPs in the sample.
+However, this turned out to be an overestimation. We would actually only find around 40\%.
+
+
+
+
+<br/><br/>
+
+# Extension <a name="ext"></a>
+
+## Objects <a name="xobj"></a>
+
+### Methods
+
+The `print` method was adjusted for all RBD objects to a little summary.
+So, to take a quick look at an object you can always do something like:
+
+```{r}
+err
+```
+
+The `plot` method was adjusted as well. For RBDerr and RBDpredict objects these are the posterior probability distributions.
+For RBDmodel objects the 40 top ranking features of the model will be plotted with their correlation-adjusted-t-scores (CAT).
+
+```{r}
+plot(model)
+```
+
+### Useful Stuff
+
+These objects are all lists. Some of the elements contained were already described above.
+Here are some more which you might find useful:
+
+- **RBDpp** These are posterior probabilities of each protein being a RBP.
+- **RBDranking** This is a sda.ranking object containing CAT scores and indices of all features.
+
+If you create a model with `RBDfit(..., model = TRUE)` the RBDmodel will contain two more objects:
+
+- **RBDfeatureExtraction** A matrix with as many rows as protein sequences and as many columns as there are features (for k=3 this is 8000).
+                           This is a count matrix for each features appearing how many times in each protein sequence.
+- **RBDlabels** The binary array of labels you provided to the function.
+
+Especially the count matrix can be quite large and it is not needed for classification.
+That is why by default `model = FALSE`.
+
+## Prediction <a name="xpred"></a>
+
+The cross validation usually takes a lot of time. 
+It creates the RBDerr objects which lets you classify the sequences with a given FDR or sensitivtiy.
+However, if you only need posterior the posterior probabilities and want to do the classification yourself you can leave out `cvRBDfit()`.
+
+```{r, message=FALSE, warning=FALSE, results='hide'}
+model <- RBDfit(sequences, labels)
+pred <- predict(model, newseq)
+```
+
+```{r, fig.height=4}
+plot(pred)
+```
+
+
+## Visualization  <a name="xviz"></a>
+
+You might want to try around with different models and eventually compare them.
+Of course you can just extract the relevant data from the RBD objects and create comparisons yourself.
+But if you just want to draw some ROC and PR curves you can use the functions from this package.
+They accept a list of RBDerr objects as first argument, too.
+
+Lets say I create two models. In the first one I will fit a model using the top 25\% of all features (the default).
+In the second I will use the top 100 of all features.
+
+```{r, message=FALSE, warning=FALSE, results='hide'}
+model1 <- RBDfit(sequences, labels)
+model2 <- RBDfit(sequences, labels, n = 100)
+```
+
+Then I do a cross validation for both models and combine the results in a list.
+There are some details on how the names are interpreted. You can look it up in the man page.
+
+```{r, message=FALSE, warning=FALSE, results='hide'}
+err1 <- cvRBDfit(model1, sequences, labels)
+err2 <- cvRBDfit(model2, sequences, labels)
+```
+
+Now, I can easily plot a ROC or PR curve comparing both models.
+
+```{r}
+ROCplot(list(err1, err2), names = c("Q1", "100"), legend = "features", title = NULL)
+```
+
+By the way, if you just want to have the data for precision, recall, and fallout you can get it with argument `data = TRUE`.
+
+```{r}
+df <- ROCplot(err, names = c("Q1", "100"), data = TRUE)
+str(df)
+```
+
+
+
+
+***
+
+
+
+
+
+
+

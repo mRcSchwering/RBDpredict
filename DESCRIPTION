@@ -1,0 +1,29 @@
+Package: RBDpredict
+Type: Package
+Title: Prediction of RNA-binding sites
+Version: 0.0.1
+Date: 2016-08-05
+Author: Bernd Fischer <b.fischer@dkfz.de>, Marc Schwering <m.schwering@dkfz.de>,
+    Mohamed Kammoun <m.kammoun@dkfz.de>
+Maintainer: Bernd Fischer <b.fischer@dkfz.de>
+Description: Prediction of RNA-binding sites
+License: Artistic-2.0
+LazyLoad: yes
+Imports:
+    methods,
+    Biostrings,
+    biomaRt,
+    RColorBrewer,
+    grid,
+    ggplot2,
+    Hmisc
+Depends:
+    Biobase,
+    R (>= 2.10)
+VignetteBuilder: knitr
+Suggests:
+    knitr,
+    rmarkdown,
+    hwriter
+biocViews: ExperimentData
+RoxygenNote: 5.0.1
